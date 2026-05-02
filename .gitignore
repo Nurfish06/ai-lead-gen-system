@@ -1,0 +1,73 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Docker
+*.log
+*.pid
+*.pid.lock
+
+# Database
+*.sqlite
+*.sqlite-journal
+postgres-data/
+
+# Backend
+backend/node_modules/
+backend/package-lock.json
+backend/.env
+
+# n8n
+n8n/.n8n
+n8n/database/
+n8n/.cache/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+backend/logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+.tmp/
+temp/
+*.tmp
+
+# Coverage directory (if testing)
+coverage/
+.nyc_output/
+
+# Build outputs
+dist/
+build/
+*.tgz
+
+# Debug
+debug.log
+
+# Secrets / Keys
+*.pem
+*.key
+*.cert
