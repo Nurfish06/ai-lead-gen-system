@@ -1,0 +1,90 @@
+{
+  "name": "Alert Manager",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alert-manager",
+        "options": {}
+      },
+      "id": "alert-webhook",
+      "name": "Alert Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO pipeline_alerts (severity, title, message, workflow_name) VALUES (:severity, :title, :message, :workflowName);",
+        "queryParameters": "severity={{$json.body.severity}}, title={{$json.body.title}}, message={{$json.body.message}}, workflowName={{$json.body.workflow_name}}",
+        "options": {}
+      },
+      "id": "log-alert-db",
+      "name": "Log Alert to DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{$json.severity}}",
+        "rules": {
+          "rules": [
+            { "value2": "critical", "output": 1 },
+            { "value2": "warning", "output": 2 }
+          ]
+        },
+        "fallbackOutput": 0
+      },
+      "id": "route-severity",
+      "name": "Route by Severity",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "message": "=ALARM: {{$json.title}}\\n{{$json.message}}",
+        "options": {}
+      },
+      "id": "slack-notification",
+      "name": "Slack Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [850, 200],
+      "notesInFlow": true,
+      "notes": "Placeholder for Slack notification. Requires Slack credentials."
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "to": "admin@example.com",
+        "subject": "=CRITICAL: {{$json.title}}",
+        "message": "={{$json.message}}\\n\\nWorkflow: {{$json.workflow_name}}",
+        "options": {}
+      },
+      "id": "email-admin",
+      "name": "Email Admin",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 1,
+      "position": [850, 400],
+      "notesInFlow": true,
+      "notes": "Placeholder for Gmail notification. Requires Gmail credentials."
+    }
+  ],
+  "connections": {
+    "Alert Webhook": { "main": [[{ "node": "Log Alert to DB", "type": "main", "index": 0 }]] },
+    "Log Alert to DB": { "main": [[{ "node": "Route by Severity", "type": "main", "index": 0 }]] },
+    "Route by Severity": {
+      "main": [
+        [],
+        [{ "node": "Slack Notification", "type": "main", "index": 0 }, { "node": "Email Admin", "type": "main", "index": 0 }],
+        [{ "node": "Slack Notification", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

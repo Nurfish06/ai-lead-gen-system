@@ -1,0 +1,56 @@
+{
+  "name": "Outreach Reconciliation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "hours": 1 }]
+        }
+      },
+      "id": "hourly-trigger",
+      "name": "Hourly Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM outreach_logs WHERE status = 'pending' AND created_at < NOW() - INTERVAL '15 minutes';",
+        "options": {}
+      },
+      "id": "fetch-stale-pending",
+      "name": "Fetch Stale Pending Logs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [450, 300],
+      "notesInFlow": true,
+      "notes": "Finds outreach logs that were initiated but never confirmed success or failure."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/alert-manager",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "severity", "value": "warning" },
+            { "name": "title", "value": "Stale Outreach Detected" },
+            { "name": "message", "value": "=Outreach log ID: {{$json.id}} for lead ID: {{$json.lead_id}} has been pending for over 15 minutes." },
+            { "name": "workflow_name", "value": "Outreach Reconciliation" }
+          ]
+        }
+      },
+      "id": "alert-stale",
+      "name": "Alert Stale Log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 300]
+    }
+  ],
+  "connections": {
+    "Hourly Trigger": { "main": [[{ "node": "Fetch Stale Pending Logs", "type": "main", "index": 0 }]] },
+    "Fetch Stale Pending Logs": { "main": [[{ "node": "Alert Stale Log", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

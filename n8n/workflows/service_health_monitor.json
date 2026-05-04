@@ -1,0 +1,113 @@
+{
+  "name": "Service Health Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "report-failure",
+        "options": {}
+      },
+      "id": "report-failure-webhook",
+      "name": "Report Failure Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE service_health SET failure_count = failure_count + 1, last_failure = NOW(), last_checked = NOW() WHERE service_name = :serviceName RETURNING *;",
+        "queryParameters": "serviceName={{$json.body.service_name}}",
+        "options": {}
+      },
+      "id": "inc-failure",
+      "name": "Increment Failure Count",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            { "value1": "={{$json.failure_count}}", "operation": "largerEqual", "value2": 5 }
+          ]
+        }
+      },
+      "id": "check-threshold",
+      "name": "Threshold Reached?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE service_health SET status = 'down' WHERE service_name = :serviceName;",
+        "queryParameters": "serviceName={{$json.service_name}}",
+        "options": {}
+      },
+      "id": "set-down",
+      "name": "Set Service DOWN",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [850, 150]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "minutes": 5 }]
+        }
+      },
+      "id": "recovery-check-trigger",
+      "name": "Recovery Check Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 450]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM service_health WHERE status = 'down';",
+        "options": {}
+      },
+      "id": "fetch-down-services",
+      "name": "Fetch DOWN Services",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [450, 450]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Placeholder logic to check service health\n// In a real scenario, this would perform a lightweight HTTP call to the service\nreturn { check_success: true };"
+      },
+      "id": "probe-service",
+      "name": "Probe Service",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 450]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE service_health SET status = 'up', failure_count = 0, last_checked = NOW() WHERE service_name = :serviceName;",
+        "queryParameters": "serviceName={{$node[\"Fetch DOWN Services\"].json.service_name}}",
+        "options": {}
+      },
+      "id": "reset-health",
+      "name": "Reset Health to UP",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [850, 450]
+    }
+  ],
+  "connections": {
+    "Report Failure Webhook": { "main": [[{ "node": "Increment Failure Count", "type": "main", "index": 0 }]] },
+    "Increment Failure Count": { "main": [[{ "node": "Check Threshold Reached?", "type": "main", "index": 0 }]] },
+    "Check Threshold Reached?": { "main": [[{ "node": "Set Service DOWN", "type": "main", "index": 0 }], []] },
+    "Recovery Check Trigger": { "main": [[{ "node": "Fetch DOWN Services", "type": "main", "index": 0 }]] },
+    "Fetch DOWN Services": { "main": [[{ "node": "Probe Service", "type": "main", "index": 0 }]] },
+    "Probe Service": { "main": [[{ "node": "Reset Health to UP", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

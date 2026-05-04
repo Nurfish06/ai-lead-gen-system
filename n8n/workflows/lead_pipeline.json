@@ -1,0 +1,98 @@
+{
+  "name": "Lead Pipeline Master Orchestration",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "minutes": 30 }]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Run Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [100, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, email, company FROM leads WHERE status = 'pending' LIMIT 50;",
+        "options": {}
+      },
+      "id": "fetch-pending",
+      "name": "Fetch Pending Leads",
+      "type": "n8n-nodes-base.postgres",
+      "position": [300, 300],
+      "typeVersion": 1,
+      "notes": "Fetches only leads in 'pending' state."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET status = 'enriching', updated_at = NOW() WHERE id = :leadId;",
+        "queryParameters": "leadId={{$json.id}}",
+        "options": {}
+      },
+      "id": "set-enriching",
+      "name": "Set Status: Enriching",
+      "type": "n8n-nodes-base.postgres",
+      "position": [500, 300],
+      "typeVersion": 1,
+      "notes": "Immediate status update for state machine enforcement."
+    },
+    {
+      "parameters": {
+        "maxQueriesPerUnit": 5,
+        "unit": "minutes"
+      },
+      "id": "child-workflow-rate-limit",
+      "name": "Child Workflow Rate Limit",
+      "type": "n8n-nodes-base.rateLimit",
+      "position": [700, 300],
+      "typeVersion": 1,
+      "notes": "Controls child workflow spawning rate."
+    },
+    {
+      "parameters": {
+        "workflowId": "enrichment-workflow-id",
+        "options": {}
+      },
+      "id": "trigger-enrichment",
+      "name": "Trigger Enrichment",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "position": [900, 300],
+      "typeVersion": 1,
+      "onError": "errorHandler"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/error-handler",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "workflow_name", "value": "Master Orchestration" },
+            { "name": "failed_node", "value": "={{$node[\"Error Handler Receiver\"].name}}" },
+            { "name": "error", "value": "={{$node[\"Error Handler Receiver\"].json.error}}" },
+            { "name": "input_payload", "value": "={{$json}}" }
+          ]
+        }
+      },
+      "id": "call-dlq",
+      "name": "Call DLQ",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 550],
+      "typeVersion": 4.1
+    }
+  ],
+  "connections": {
+    "Run Every 30 Minutes": { "main": [[{ "node": "Fetch Pending Leads", "type": "main", "index": 0 }]] },
+    "Fetch Pending Leads": { "main": [[{ "node": "Set Status: Enriching", "type": "main", "index": 0 }]] },
+    "Set Status: Enriching": { "main": [[{ "node": "Child Workflow Rate Limit", "type": "main", "index": 0 }]] },
+    "Child Workflow Rate Limit": { "main": [[{ "node": "Trigger Enrichment", "type": "main", "index": 0 }]] },
+    "Trigger Enrichment": {
+        "error": [[{ "node": "Call DLQ", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,168 @@
+{
+  "name": "Automated Follow-up Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "hours": 12 }]
+        }
+      },
+      "id": "schedule-followup",
+      "name": "Run Every 12 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [100, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT l.id, l.name, l.email, l.company, l.status, ol.followup_count, ol.replied, ol.last_followup_at FROM leads l JOIN outreach_logs ol ON l.id = ol.lead_id WHERE l.status = 'contacted' AND ol.replied = false AND ol.followup_count < 3 AND (ol.last_followup_at IS NULL OR ol.last_followup_at < NOW() - INTERVAL '2 days') ORDER BY ol.followup_count ASC;",
+        "options": {}
+      },
+      "id": "fetch-followup-leads",
+      "name": "Fetch Leads Needing Follow-up",
+      "type": "n8n-nodes-base.postgres",
+      "position": [300, 300],
+      "typeVersion": 1,
+      "notes": "Queries leads eligible for follow-up."
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $input.first().json;\nconst followupCount = lead.followup_count || 0;\n\nlet emailSubject = '';\nlet emailBody = '';\n\nif (followupCount === 0) {\n  emailSubject = `Following up: ${lead.company} / ${lead.name}`;\n  emailBody = `Hi ${lead.name},\\n\\nJust wanted to follow up on my previous email. I'd love to chat about how we can help ${lead.company} with our AI solutions.\\n\\nAre you available for a quick 15-minute call next week?\\n\\nBest regards,\\nSales Team`;\n} else if (followupCount === 1) {\n  emailSubject = `Re: ${lead.company} - AI Solutions`;\n  emailBody = `Hi ${lead.name},\\n\\nI wanted to share a case study of how we helped a similar company in your industry increase their lead conversion by 40%.\\n\\nWould you be open to seeing how this could apply to ${lead.company}?\\n\\nBest,\\nSales Team`;\n} else {\n  emailSubject = `Final attempt: ${lead.company}`;\n  emailBody = `Hi ${lead.name},\\n\\nThis is my last attempt to reach you. We're running a special offer for companies like ${lead.company} this month.\\n\\nIf you're interested, let me know. If not, I'll stop reaching out.\\n\\nThanks,\\nSales Team`;\n}\n\nreturn {\n  lead_id: lead.id,\n  email: lead.email,\n  name: lead.name,\n  company: lead.company,\n  followup_count: followupCount,\n  email_subject: emailSubject,\n  email_body: emailBody\n};"
+      },
+      "id": "generate-content",
+      "name": "Generate Follow-up Content",
+      "type": "n8n-nodes-base.code",
+      "position": [500, 300],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO outreach_logs (lead_id, email_subject, email_body, status, followup_count) VALUES (:leadId, :subject, :body, 'pending', :count) RETURNING id;",
+        "queryParameters": "leadId={{$json.lead_id}}, subject={{$json.email_subject}}, body={{$json.email_body}}, count={{$json.followup_count}}",
+        "options": {}
+      },
+      "id": "log-pending",
+      "name": "Log-First: Pending",
+      "type": "n8n-nodes-base.postgres",
+      "position": [700, 300],
+      "typeVersion": 1,
+      "notes": "Transactional integrity: Record intent before execution."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT status FROM service_health WHERE service_name = 'gmail';",
+        "options": {}
+      },
+      "id": "check-gmail-health",
+      "name": "Check Gmail Health",
+      "type": "n8n-nodes-base.postgres",
+      "position": [900, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "maxQueriesPerUnit": 10,
+        "unit": "minutes"
+      },
+      "id": "gmail-rate-limit",
+      "name": "Gmail Rate Limit",
+      "type": "n8n-nodes-base.rateLimit",
+      "position": [1100, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "to": "={{$node[\"Generate Follow-up Content\"].json.email}}",
+        "subject": "={{$node[\"Generate Follow-up Content\"].json.email_subject}}",
+        "message": "={{$node[\"Generate Follow-up Content\"].json.email_body}}",
+        "options": {}
+      },
+      "id": "send-gmail",
+      "name": "Send Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "position": [1300, 300],
+      "typeVersion": 1,
+      "onError": "errorHandler"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE outreach_logs SET status = 'sent', sent_at = NOW() WHERE id = :logId;",
+        "queryParameters": "logId={{$node[\"Log-First: Pending\"].json.id}}",
+        "options": {}
+      },
+      "id": "update-log-success",
+      "name": "Update Log: Sent",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1500, 200],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE outreach_logs SET status = 'failed' WHERE id = :logId;",
+        "queryParameters": "logId={{$node[\"Log-First: Pending\"].json.id}}",
+        "options": {}
+      },
+      "id": "update-log-failure",
+      "name": "Update Log: Failed",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1500, 400],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET followup_attempts = followup_attempts + 1, status = CASE WHEN :count >= 2 THEN 'no_response' ELSE status END WHERE id = :leadId;",
+        "queryParameters": "leadId={{$node[\"Generate Follow-up Content\"].json.lead_id}}, count={{$node[\"Generate Follow-up Content\"].json.followup_count}}",
+        "options": {}
+      },
+      "id": "update-lead-stats",
+      "name": "Update Lead Stats",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1700, 300],
+      "typeVersion": 1,
+      "notes": "Updates attempt count and sets status to no_response if max reached."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/error-handler",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "workflow_name", "value": "Automated Follow-up Workflow" },
+            { "name": "failed_node", "value": "={{$node[\"Error Handler Receiver\"].name}}" },
+            { "name": "error", "value": "={{$node[\"Error Handler Receiver\"].json.error}}" },
+            { "name": "input_payload", "value": "={{$node[\"Generate Follow-up Content\"].json}}" }
+          ]
+        }
+      },
+      "id": "call-dlq",
+      "name": "Call DLQ",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1700, 550],
+      "typeVersion": 4.1
+    }
+  ],
+  "connections": {
+    "Run Every 12 Hours": { "main": [[{ "node": "Fetch Leads Needing Follow-up", "type": "main", "index": 0 }]] },
+    "Fetch Leads Needing Follow-up": { "main": [[{ "node": "Generate Follow-up Content", "type": "main", "index": 0 }]] },
+    "Generate Follow-up Content": { "main": [[{ "node": "Log-First: Pending", "type": "main", "index": 0 }]] },
+    "Log-First: Pending": { "main": [[{ "node": "Check Gmail Health", "type": "main", "index": 0 }]] },
+    "Check Gmail Health": { "main": [[{ "node": "Gmail Rate Limit", "type": "main", "index": 0 }]] },
+    "Gmail Rate Limit": { "main": [[{ "node": "Send Gmail", "type": "main", "index": 0 }]] },
+    "Send Gmail": { 
+        "main": [[{ "node": "Update Log: Sent", "type": "main", "index": 0 }]],
+        "error": [[{ "node": "Update Log: Failed", "type": "main", "index": 0 }, { "node": "Call DLQ", "type": "main", "index": 0 }]]
+    },
+    "Update Log: Sent": { "main": [[{ "node": "Update Lead Stats", "type": "main", "index": 0 }]] },
+    "Update Log: Failed": { "main": [[{ "node": "Update Lead Stats", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

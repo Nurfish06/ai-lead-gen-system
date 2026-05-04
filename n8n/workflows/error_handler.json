@@ -1,0 +1,71 @@
+{
+  "name": "Error Handler (DLQ)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "error-handler",
+        "options": {}
+      },
+      "id": "trigger-webhook",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst error = body.error || {};\nconst statusCode = error.response?.status || 0;\n\n// 4xx errors are usually permanent, 5xx/timeouts are transient\nlet status = 'pending';\nif (statusCode >= 400 && statusCode < 500) {\n  status = 'failed'; // Permanent failure\n}\n\nreturn {\n  workflow_name: body.workflow_name || 'Unknown',\n  failed_node: body.failed_node || 'Unknown',\n  error_message: error.message || 'No message provided',\n  input_payload: body.input_payload || {},\n  status: status\n};"
+      },
+      "id": "process-error",
+      "name": "Process Error Details",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "notesInFlow": true,
+      "notes": "Classifies errors as transient or permanent based on HTTP status codes."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO pipeline_errors (workflow_name, failed_node, error_message, input_payload, status) VALUES (:workflowName, :failedNode, :errorMessage, :inputPayload, :status);",
+        "queryParameters": "workflowName={{$json.workflow_name}}, failedNode={{$json.failed_node}}, errorMessage={{$json.error_message}}, inputPayload={{JSON.stringify($json.input_payload)}}, status={{$json.status}}",
+        "options": {}
+      },
+      "id": "insert-dlq",
+      "name": "Insert into DLQ",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "notesInFlow": true,
+      "notes": "Uses parameterized queries for security."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/alert-manager",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "severity", "value": "critical" },
+            { "name": "title", "value": "=Error in workflow: {{$json.workflow_name}}" },
+            { "name": "message", "value": "=Node: {{$json.failed_node}} failed with error: {{$json.error_message}}" },
+            { "name": "workflow_name", "value": "={{$json.workflow_name}}" }
+          ]
+        }
+      },
+      "id": "trigger-alert",
+      "name": "Trigger Alert Manager",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [850, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": { "main": [[{ "node": "Process Error Details", "type": "main", "index": 0 }]] },
+    "Process Error Details": { "main": [[{ "node": "Insert into DLQ", "type": "main", "index": 0 }]] },
+    "Insert into DLQ": { "main": [[{ "node": "Trigger Alert Manager", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": ["error-handling", "dlq"]
+}

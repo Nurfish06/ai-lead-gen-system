@@ -1,0 +1,193 @@
+{
+  "name": "Lead Enrichment Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "httpMethod": "POST",
+        "path": "enrich-lead-webhook",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [100, 300],
+      "typeVersion": 1,
+      "notes": "Secure webhook with Header Auth."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT status FROM leads WHERE id = :leadId;",
+        "queryParameters": "leadId={{$json.body.lead_id}}",
+        "options": {}
+      },
+      "id": "idempotency-check",
+      "name": "Idempotency Check",
+      "type": "n8n-nodes-base.postgres",
+      "position": [300, 300],
+      "typeVersion": 1,
+      "notes": "Ensures lead isn't processed twice."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.status}}",
+              "operation": "in",
+              "value2": "enriched,enriching"
+            }
+          ]
+        }
+      },
+      "id": "is-already-processed",
+      "name": "Is Already Processed?",
+      "type": "n8n-nodes-base.if",
+      "position": [500, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT status FROM service_health WHERE service_name = 'enrichment_api';",
+        "options": {}
+      },
+      "id": "check-service-health",
+      "name": "Check Service Health",
+      "type": "n8n-nodes-base.postgres",
+      "position": [700, 300],
+      "typeVersion": 1,
+      "notes": "Circuit breaker check."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.status}}",
+              "value2": "up"
+            }
+          ]
+        }
+      },
+      "id": "is-service-up",
+      "name": "Is Service UP?",
+      "type": "n8n-nodes-base.if",
+      "position": [900, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "maxQueriesPerUnit": 10,
+        "unit": "minutes"
+      },
+      "id": "rate-limit-node",
+      "name": "Rate Limit (10/min)",
+      "type": "n8n-nodes-base.rateLimit",
+      "position": [1100, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:3000/api/leads/enrich",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "name", "value": "={{$node[\"Webhook Trigger\"].json.body.name}}" },
+            { "name": "email", "value": "={{$node[\"Webhook Trigger\"].json.body.email}}" },
+            { "name": "company_name", "value": "={{$node[\"Webhook Trigger\"].json.body.company}}" }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "call-enrich-api",
+      "name": "Call Enrichment API",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1300, 300],
+      "typeVersion": 4.1,
+      "onError": "errorHandler"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract company data from enrichment API\nconst enrichedData = $input.first().json;\n\nreturn {\n  lead_id: $node[\"Webhook Trigger\"].json.body.lead_id,\n  company_size: enrichedData.company_size || 'Unknown',\n  industry: enrichedData.industry || 'Not specified',\n  linkedin: enrichedData.linkedin_url || '',\n  twitter: enrichedData.twitter_handle || '',\n  website: enrichedData.website || '',\n  revenue_range: enrichedData.revenue_range || 'Unknown',\n  location: enrichedData.location || 'Unknown',\n  employee_count: enrichedData.employee_count || 0,\n  technologies: enrichedData.technologies || [],\n  enrichment_score: enrichedData.confidence_score || 0\n};"
+      },
+      "id": "parse-enriched-data",
+      "name": "Parse Enriched Data",
+      "type": "n8n-nodes-base.code",
+      "position": [1500, 300],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET company_size = :companySize, industry = :industry, linkedin_url = :linkedin, twitter_handle = :twitter, website = :website, revenue_range = :revenueRange, location = :location, employee_count = :employeeCount, technologies = :technologies, enrichment_score = :score, status = 'enriched', updated_at = NOW() WHERE id = :leadId RETURNING *;",
+        "queryParameters": "companySize={{$json.company_size}}, industry={{$json.industry}}, linkedin={{$json.linkedin}}, twitter={{$json.twitter}}, website={{$json.website}}, revenueRange={{$json.revenue_range}}, location={{$json.location}}, employeeCount={{$json.employee_count}}, technologies={{JSON.stringify($json.technologies)}}, score={{$json.enrichment_score}}, leadId={{$json.lead_id}}",
+        "options": {}
+      },
+      "id": "save-to-database",
+      "name": "Save to Database",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1700, 300],
+      "typeVersion": 1,
+      "onError": "errorHandler"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/error-handler",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "workflow_name", "value": "Lead Enrichment Workflow" },
+            { "name": "failed_node", "value": "={{$node[\"Error Handler Receiver\"].name}}" },
+            { "name": "error", "value": "={{$node[\"Error Handler Receiver\"].json.error}}" },
+            { "name": "input_payload", "value": "={{$node[\"Webhook Trigger\"].json.body}}" }
+          ]
+        }
+      },
+      "id": "call-error-handler",
+      "name": "Call Error Handler",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1500, 550],
+      "typeVersion": 4.1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/report-failure",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "service_name", "value": "enrichment_api" }
+          ]
+        }
+      },
+      "id": "report-service-failure",
+      "name": "Report Service Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1300, 550],
+      "typeVersion": 4.1
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": { "main": [[{ "node": "Idempotency Check", "type": "main", "index": 0 }]] },
+    "Idempotency Check": { "main": [[{ "node": "Is Already Processed?", "type": "main", "index": 0 }]] },
+    "Is Already Processed?": { "main": [[], [{ "node": "Check Service Health", "type": "main", "index": 0 }]] },
+    "Check Service Health": { "main": [[{ "node": "Is Service UP?", "type": "main", "index": 0 }]] },
+    "Is Service UP?": { "main": [[{ "node": "Rate Limit (10/min)", "type": "main", "index": 0 }]] },
+    "Rate Limit (10/min)": { "main": [[{ "node": "Call Enrichment API", "type": "main", "index": 0 }]] },
+    "Call Enrichment API": { 
+        "main": [[{ "node": "Parse Enriched Data", "type": "main", "index": 0 }]],
+        "error": [[{ "node": "Report Service Failure", "type": "main", "index": 0 }, { "node": "Call Error Handler", "type": "main", "index": 0 }]]
+    },
+    "Parse Enriched Data": { "main": [[{ "node": "Save to Database", "type": "main", "index": 0 }]] },
+    "Save to Database": {
+        "main": [],
+        "error": [[{ "node": "Call Error Handler", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

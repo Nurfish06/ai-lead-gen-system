@@ -1,0 +1,190 @@
+{
+  "name": "AI Email Outreach Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "minutes": 15 }]
+        }
+      },
+      "id": "schedule-outreach",
+      "name": "Run Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [100, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, email, company, industry, title, company_size, location FROM leads WHERE status = 'enriched' AND (last_outreach IS NULL OR last_outreach < NOW() - INTERVAL '1 day') LIMIT 10;",
+        "options": {}
+      },
+      "id": "fetch-ready-leads",
+      "name": "Fetch Ready Leads",
+      "type": "n8n-nodes-base.postgres",
+      "position": [300, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT status FROM service_health WHERE service_name = 'ai_email_api';",
+        "options": {}
+      },
+      "id": "check-ai-health",
+      "name": "Check AI Service Health",
+      "type": "n8n-nodes-base.postgres",
+      "position": [500, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "maxQueriesPerUnit": 5,
+        "unit": "minutes"
+      },
+      "id": "ai-rate-limit",
+      "name": "AI Rate Limit",
+      "type": "n8n-nodes-base.rateLimit",
+      "position": [700, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:3000/api/ai/generate-email",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "name", "value": "={{$json.name}}" },
+            { "name": "company", "value": "={{$json.company}}" },
+            { "name": "industry", "value": "={{$json.industry}}" }
+          ]
+        },
+        "options": { "timeout": 20000 }
+      },
+      "id": "generate-ai-email",
+      "name": "Generate AI Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 300],
+      "typeVersion": 4.1,
+      "onError": "errorHandler"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO outreach_logs (lead_id, email_subject, email_body, status) VALUES (:leadId, :subject, :body, 'pending') RETURNING id;",
+        "queryParameters": "leadId={{$node[\"Fetch Ready Leads\"].json.id}}, subject={{$json.email_subject}}, body={{$json.generated_email}}",
+        "options": {}
+      },
+      "id": "log-pending",
+      "name": "Log-First: Pending",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1100, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT status FROM service_health WHERE service_name = 'gmail';",
+        "options": {}
+      },
+      "id": "check-gmail-health",
+      "name": "Check Gmail Health",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1300, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "maxQueriesPerUnit": 10,
+        "unit": "minutes"
+      },
+      "id": "gmail-rate-limit",
+      "name": "Gmail Rate Limit",
+      "type": "n8n-nodes-base.rateLimit",
+      "position": [1500, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "to": "={{$node[\"Fetch Ready Leads\"].json.email}}",
+        "subject": "={{$node[\"Generate AI Email\"].json.email_subject}}",
+        "message": "={{$node[\"Generate AI Email\"].json.generated_email}}",
+        "options": {}
+      },
+      "id": "send-via-gmail",
+      "name": "Send via Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "position": [1700, 300],
+      "typeVersion": 1,
+      "onError": "errorHandler"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE outreach_logs SET status = 'sent', sent_at = NOW() WHERE id = :logId;",
+        "queryParameters": "logId={{$node[\"Log-First: Pending\"].json.id}}",
+        "options": {}
+      },
+      "id": "update-log-sent",
+      "name": "Update Log: Sent",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1900, 200],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET status = 'contacted', last_outreach = NOW(), email_sent_count = email_sent_count + 1 WHERE id = :leadId;",
+        "queryParameters": "leadId={{$node[\"Fetch Ready Leads\"].json.id}}",
+        "options": {}
+      },
+      "id": "update-lead-status",
+      "name": "Update Lead Status",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2100, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/error-handler",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "workflow_name", "value": "AI Outreach Workflow" },
+            { "name": "failed_node", "value": "={{$node[\"Error Handler Receiver\"].name}}" },
+            { "name": "error", "value": "={{$node[\"Error Handler Receiver\"].json.error}}" },
+            { "name": "input_payload", "value": "={{$json}}" }
+          ]
+        }
+      },
+      "id": "call-dlq",
+      "name": "Call DLQ",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1700, 550],
+      "typeVersion": 4.1
+    }
+  ],
+  "connections": {
+    "Run Every 15 Minutes": { "main": [[{ "node": "Fetch Ready Leads", "type": "main", "index": 0 }]] },
+    "Fetch Ready Leads": { "main": [[{ "node": "Check AI Service Health", "type": "main", "index": 0 }]] },
+    "Check AI Service Health": { "main": [[{ "node": "AI Rate Limit", "type": "main", "index": 0 }]] },
+    "AI Rate Limit": { "main": [[{ "node": "Generate AI Email", "type": "main", "index": 0 }]] },
+    "Generate AI Email": { 
+        "main": [[{ "node": "Log-First: Pending", "type": "main", "index": 0 }]],
+        "error": [[{ "node": "Call DLQ", "type": "main", "index": 0 }]]
+    },
+    "Log-First: Pending": { "main": [[{ "node": "Check Gmail Health", "type": "main", "index": 0 }]] },
+    "Check Gmail Health": { "main": [[{ "node": "Gmail Rate Limit", "type": "main", "index": 0 }]] },
+    "Gmail Rate Limit": { "main": [[{ "node": "Send via Gmail", "type": "main", "index": 0 }]] },
+    "Send via Gmail": {
+        "main": [[{ "node": "Update Log: Sent", "type": "main", "index": 0 }]],
+        "error": [[{ "node": "Call DLQ", "type": "main", "index": 0 }]]
+    },
+    "Update Log: Sent": { "main": [[{ "node": "Update Lead Status", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
