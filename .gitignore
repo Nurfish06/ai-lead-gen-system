@@ -64,6 +64,11 @@ dist/
 build/
 *.tgz
 
+# internal files
+n8n/workflows/context for the workflow.md
+n8n_setup_guide.md
+DEPLOYMENT_GUIDE.md
+TESTING_GUIDE.md
 # Debug
 debug.log
 
