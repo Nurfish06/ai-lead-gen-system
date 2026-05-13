@@ -3,49 +3,54 @@
   "nodes": [
     {
       "parameters": {
-        "authentication": "headerAuth",
         "httpMethod": "POST",
-        "path": "enrich-lead-webhook",
-        "responseMode": "onReceived",
+        "path": "enrich-lead",
         "options": {}
       },
-      "id": "webhook-trigger",
+      "id": "Webhook Trigger",
       "name": "Webhook Trigger",
       "type": "n8n-nodes-base.webhook",
       "position": [100, 300],
-      "typeVersion": 1,
-      "notes": "Secure webhook with Header Auth."
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "jsCode": "// Replay Attack Prevention: Sliding Window Check (+/- 5 minutes)\nconst requestTime = new Date($json.body.timestamp).getTime();\nconst now = new Date().getTime();\nconst windowMs = 5 * 60 * 1000;\n\nif (!requestTime || Math.abs(now - requestTime) > windowMs) {\n    throw new Error(\"Security Alert: Replay attack detected or clock skew too high. Request rejected.\");\n}\n\nreturn $json;"
+      },
+      "id": "timestamp-validation",
+      "name": "Verify Request Freshness",
+      "type": "n8n-nodes-base.code",
+      "position": [300, 300],
+      "typeVersion": 2
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT status FROM leads WHERE id = :leadId;",
-        "queryParameters": "leadId={{$json.body.lead_id}}",
+        "query": "SELECT id FROM leads WHERE id = :leadId AND status != 'enriched';",
+        "queryParameters": "leadId={{$node[\"Webhook Trigger\"].json.body.lead_id}}",
         "options": {}
       },
-      "id": "idempotency-check",
+      "id": "Idempotency Check",
       "name": "Idempotency Check",
       "type": "n8n-nodes-base.postgres",
-      "position": [300, 300],
-      "typeVersion": 1,
-      "notes": "Ensures lead isn't processed twice."
+      "position": [500, 300],
+      "typeVersion": 1
     },
     {
       "parameters": {
         "conditions": {
-          "string": [
+          "boolean": [
             {
-              "value1": "={{$json.status}}",
-              "operation": "in",
-              "value2": "enriched,enriching"
+              "value1": "={{!!$json.id}}",
+              "value2": true
             }
           ]
         }
       },
-      "id": "is-already-processed",
+      "id": "Is Already Processed?",
       "name": "Is Already Processed?",
       "type": "n8n-nodes-base.if",
-      "position": [500, 300],
+      "position": [700, 300],
       "typeVersion": 1
     },
     {
@@ -54,12 +59,11 @@
         "query": "SELECT status FROM service_health WHERE service_name = 'enrichment_api';",
         "options": {}
       },
-      "id": "check-service-health",
+      "id": "Check Service Health",
       "name": "Check Service Health",
       "type": "n8n-nodes-base.postgres",
-      "position": [700, 300],
-      "typeVersion": 1,
-      "notes": "Circuit breaker check."
+      "position": [900, 300],
+      "typeVersion": 1
     },
     {
       "parameters": {
@@ -72,10 +76,10 @@
           ]
         }
       },
-      "id": "is-service-up",
+      "id": "Is Service UP?",
       "name": "Is Service UP?",
       "type": "n8n-nodes-base.if",
-      "position": [900, 300],
+      "position": [1100, 300],
       "typeVersion": 1
     },
     {
@@ -83,30 +87,29 @@
         "maxQueriesPerUnit": 10,
         "unit": "minutes"
       },
-      "id": "rate-limit-node",
+      "id": "Rate Limit (10/min)",
       "name": "Rate Limit (10/min)",
       "type": "n8n-nodes-base.rateLimit",
-      "position": [1100, 300],
+      "position": [1300, 300],
       "typeVersion": 1
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "http://backend:3000/api/leads/enrich",
+        "url": "http://backend:3000/api/enrich",
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            { "name": "name", "value": "={{$node[\"Webhook Trigger\"].json.body.name}}" },
             { "name": "email", "value": "={{$node[\"Webhook Trigger\"].json.body.email}}" },
-            { "name": "company_name", "value": "={{$node[\"Webhook Trigger\"].json.body.company}}" }
+            { "name": "company", "value": "={{$node[\"Webhook Trigger\"].json.body.company}}" }
           ]
         },
         "options": { "timeout": 15000 }
       },
-      "id": "call-enrich-api",
+      "id": "Call Enrichment API",
       "name": "Call Enrichment API",
       "type": "n8n-nodes-base.httpRequest",
-      "position": [1300, 300],
+      "position": [1500, 300],
       "typeVersion": 4.1,
       "onError": "errorHandler"
     },
@@ -114,25 +117,48 @@
       "parameters": {
         "jsCode": "// Extract company data from enrichment API\nconst enrichedData = $input.first().json;\n\nreturn {\n  lead_id: $node[\"Webhook Trigger\"].json.body.lead_id,\n  company_size: enrichedData.company_size || 'Unknown',\n  industry: enrichedData.industry || 'Not specified',\n  linkedin: enrichedData.linkedin_url || '',\n  twitter: enrichedData.twitter_handle || '',\n  website: enrichedData.website || '',\n  revenue_range: enrichedData.revenue_range || 'Unknown',\n  location: enrichedData.location || 'Unknown',\n  employee_count: enrichedData.employee_count || 0,\n  technologies: enrichedData.technologies || [],\n  enrichment_score: enrichedData.confidence_score || 0\n};"
       },
-      "id": "parse-enriched-data",
+      "id": "Parse Enriched Data",
       "name": "Parse Enriched Data",
       "type": "n8n-nodes-base.code",
-      "position": [1500, 300],
+      "position": [1700, 300],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lead Scoring Engine Logic\nconst data = $input.first().json;\nlet score = 0;\n\n// 1. Company Size Scoring\nconst empCount = data.employee_count || 0;\nif (empCount > 5000) score += 40;\nelse if (empCount > 1000) score += 30;\nelse if (empCount > 200) score += 20;\nelse if (empCount > 50) score += 10;\n\n// 2. Revenue Scoring\nconst revenue = data.revenue_range || '';\nif (revenue.includes('Billion')) score += 50;\nelse if (revenue.includes('Million')) score += 25;\n\n// 3. Tech Stack Scoring\nconst techs = data.technologies || [];\nif (techs.includes('aws')) score += 15;\nif (techs.includes('react')) score += 10;\n\n// 4. Enrichment Confidence\nscore += (data.enrichment_score * 10);\n\nreturn {\n    ...data,\n    lead_score: Math.round(Math.min(score, 100))\n};"
+      },
+      "id": "lead-scoring-engine",
+      "name": "Lead Scoring Engine",
+      "type": "n8n-nodes-base.code",
+      "position": [1900, 300],
       "typeVersion": 2
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE leads SET company_size = :companySize, industry = :industry, linkedin_url = :linkedin, twitter_handle = :twitter, website = :website, revenue_range = :revenueRange, location = :location, employee_count = :employeeCount, technologies = :technologies, enrichment_score = :score, status = 'enriched', updated_at = NOW() WHERE id = :leadId RETURNING *;",
-        "queryParameters": "companySize={{$json.company_size}}, industry={{$json.industry}}, linkedin={{$json.linkedin}}, twitter={{$json.twitter}}, website={{$json.website}}, revenueRange={{$json.revenue_range}}, location={{$json.location}}, employeeCount={{$json.employee_count}}, technologies={{JSON.stringify($json.technologies)}}, score={{$json.enrichment_score}}, leadId={{$json.lead_id}}",
+        "query": "UPDATE leads SET company_size = :companySize, industry = :industry, linkedin_url = :linkedin, twitter_handle = :twitter, website = :website, revenue_range = :revenueRange, location = :location, employee_count = :employeeCount, technologies = :technologies, enrichment_score = :score, lead_score = :leadScore, status = 'enriched', updated_at = NOW() WHERE id = :leadId RETURNING *;",
+        "queryParameters": "companySize={{$json.company_size}}, industry={{$json.industry}}, linkedin={{$json.linkedin}}, twitter={{$json.twitter}}, website={{$json.website}}, revenueRange={{$json.revenue_range}}, location={{$json.location}}, employeeCount={{$json.employee_count}}, technologies={{JSON.stringify($json.technologies)}}, score={{$json.enrichment_score}}, leadScore={{$json.lead_score}}, leadId={{$json.lead_id}}",
         "options": {}
       },
       "id": "save-to-database",
       "name": "Save to Database",
       "type": "n8n-nodes-base.postgres",
-      "position": [1700, 300],
+      "position": [2100, 300],
       "typeVersion": 1,
       "onError": "errorHandler"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (workflow_name, actor, action, lead_id, details) VALUES ('Lead Enrichment', 'enrichment_service', 'ENRICH_SUCCESS', :leadId, :details);",
+        "queryParameters": "leadId={{$json.id}}, details={{JSON.stringify({ company: $json.company_name, score: $json.lead_score })}}",
+        "options": {}
+      },
+      "id": "audit-enrichment",
+      "name": "Audit Enrichment Success",
+      "type": "n8n-nodes-base.postgres",
+      "position": [2300, 300],
+      "typeVersion": 1
     },
     {
       "parameters": {
@@ -151,7 +177,7 @@
       "id": "call-error-handler",
       "name": "Call Error Handler",
       "type": "n8n-nodes-base.httpRequest",
-      "position": [1500, 550],
+      "position": [1900, 550],
       "typeVersion": 4.1
     },
     {
@@ -173,7 +199,8 @@
     }
   ],
   "connections": {
-    "Webhook Trigger": { "main": [[{ "node": "Idempotency Check", "type": "main", "index": 0 }]] },
+    "Webhook Trigger": { "main": [[{ "node": "Verify Request Freshness", "type": "main", "index": 0 }]] },
+    "Verify Request Freshness": { "main": [[{ "node": "Idempotency Check", "type": "main", "index": 0 }]] },
     "Idempotency Check": { "main": [[{ "node": "Is Already Processed?", "type": "main", "index": 0 }]] },
     "Is Already Processed?": { "main": [[], [{ "node": "Check Service Health", "type": "main", "index": 0 }]] },
     "Check Service Health": { "main": [[{ "node": "Is Service UP?", "type": "main", "index": 0 }]] },
@@ -183,9 +210,10 @@
         "main": [[{ "node": "Parse Enriched Data", "type": "main", "index": 0 }]],
         "error": [[{ "node": "Report Service Failure", "type": "main", "index": 0 }, { "node": "Call Error Handler", "type": "main", "index": 0 }]]
     },
-    "Parse Enriched Data": { "main": [[{ "node": "Save to Database", "type": "main", "index": 0 }]] },
+    "Parse Enriched Data": { "main": [[{ "node": "Lead Scoring Engine", "type": "main", "index": 0 }]] },
+    "Lead Scoring Engine": { "main": [[{ "node": "Save to Database", "type": "main", "index": 0 }]] },
     "Save to Database": {
-        "main": [],
+        "main": [[{ "node": "Audit Enrichment Success", "type": "main", "index": 0 }]],
         "error": [[{ "node": "Call Error Handler", "type": "main", "index": 0 }]]
     }
   },

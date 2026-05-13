@@ -69,6 +69,10 @@ n8n/workflows/context for the workflow.md
 n8n_setup_guide.md
 DEPLOYMENT_GUIDE.md
 TESTING_GUIDE.md
+SYSTEM_ARCHITECTURE.md
+improvement.md
+Security_Improvement.md
+case_study_leadpulse.md
 # Debug
 debug.log
 

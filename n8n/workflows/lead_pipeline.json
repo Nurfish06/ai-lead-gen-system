@@ -16,29 +16,15 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, name, email, company FROM leads WHERE status = 'pending' LIMIT 50;",
+        "query": "WITH claimed_leads AS (\n  SELECT id \n  FROM leads \n  WHERE status = 'pending' \n  ORDER BY created_at ASC \n  LIMIT 50 \n  FOR UPDATE SKIP LOCKED\n)\nUPDATE leads \nSET status = 'enriching', updated_at = NOW() \nFROM claimed_leads \nWHERE leads.id = claimed_leads.id \nRETURNING leads.id, leads.name, leads.email, leads.company;",
         "options": {}
       },
-      "id": "fetch-pending",
-      "name": "Fetch Pending Leads",
+      "id": "claim-and-fetch",
+      "name": "Atomic Claim & Fetch",
       "type": "n8n-nodes-base.postgres",
       "position": [300, 300],
       "typeVersion": 1,
-      "notes": "Fetches only leads in 'pending' state."
-    },
-    {
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "UPDATE leads SET status = 'enriching', updated_at = NOW() WHERE id = :leadId;",
-        "queryParameters": "leadId={{$json.id}}",
-        "options": {}
-      },
-      "id": "set-enriching",
-      "name": "Set Status: Enriching",
-      "type": "n8n-nodes-base.postgres",
-      "position": [500, 300],
-      "typeVersion": 1,
-      "notes": "Immediate status update for state machine enforcement."
+      "notes": "Uses SELECT FOR UPDATE SKIP LOCKED to prevent race conditions during scaling."
     },
     {
       "parameters": {
@@ -86,9 +72,8 @@
     }
   ],
   "connections": {
-    "Run Every 30 Minutes": { "main": [[{ "node": "Fetch Pending Leads", "type": "main", "index": 0 }]] },
-    "Fetch Pending Leads": { "main": [[{ "node": "Set Status: Enriching", "type": "main", "index": 0 }]] },
-    "Set Status: Enriching": { "main": [[{ "node": "Child Workflow Rate Limit", "type": "main", "index": 0 }]] },
+    "Run Every 30 Minutes": { "main": [[{ "node": "Atomic Claim & Fetch", "type": "main", "index": 0 }]] },
+    "Atomic Claim & Fetch": { "main": [[{ "node": "Child Workflow Rate Limit", "type": "main", "index": 0 }]] },
     "Child Workflow Rate Limit": { "main": [[{ "node": "Trigger Enrichment", "type": "main", "index": 0 }]] },
     "Trigger Enrichment": {
         "error": [[{ "node": "Call DLQ", "type": "main", "index": 0 }]]

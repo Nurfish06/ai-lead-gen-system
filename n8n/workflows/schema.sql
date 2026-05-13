@@ -53,3 +53,19 @@ BEGIN
         ALTER TABLE leads ADD COLUMN status TEXT DEFAULT 'pending';
     END IF;
 END $$;
+-- 6. Reply Tracking Enhancements
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='outreach_logs' AND column_name='thread_id') THEN
+        ALTER TABLE outreach_logs ADD COLUMN thread_id TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='outreach_logs' AND column_name='replied') THEN
+        ALTER TABLE outreach_logs ADD COLUMN replied BOOLEAN DEFAULT FALSE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='outreach_logs' AND column_name='replied_at') THEN
+        ALTER TABLE outreach_logs ADD COLUMN replied_at TIMESTAMP;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='leads' AND column_name='lead_score') THEN
+        ALTER TABLE leads ADD COLUMN lead_score INT DEFAULT 0;
+    END IF;
+END $$;

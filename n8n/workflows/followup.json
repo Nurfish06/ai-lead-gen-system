@@ -92,8 +92,8 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE outreach_logs SET status = 'sent', sent_at = NOW() WHERE id = :logId;",
-        "queryParameters": "logId={{$node[\"Log-First: Pending\"].json.id}}",
+        "query": "UPDATE outreach_logs SET status = 'sent', sent_at = NOW(), thread_id = :threadId WHERE id = :logId;",
+        "queryParameters": "logId={{$node[\"Log-First: Pending\"].json.id}}, threadId={{$node[\"Send Gmail\"].json.threadId}}",
         "options": {}
       },
       "id": "update-log-success",

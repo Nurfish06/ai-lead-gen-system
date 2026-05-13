@@ -50,14 +50,25 @@
     },
     {
       "parameters": {
+        "jsCode": "const versions = ['v1_direct', 'v2_storytelling'];\nconst chosen = versions[Math.floor(Math.random() * versions.length)];\nreturn { prompt_version: chosen };"
+      },
+      "id": "ab-version-selector",
+      "name": "A/B Version Selector",
+      "type": "n8n-nodes-base.code",
+      "position": [800, 450],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "http://backend:3000/api/ai/generate-email",
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
-            { "name": "name", "value": "={{$json.name}}" },
-            { "name": "company", "value": "={{$json.company}}" },
-            { "name": "industry", "value": "={{$json.industry}}" }
+            { "name": "name", "value": "={{$node[\"Fetch Ready Leads\"].json.name}}" },
+            { "name": "company", "value": "={{$node[\"Fetch Ready Leads\"].json.company}}" },
+            { "name": "industry", "value": "={{$node[\"Fetch Ready Leads\"].json.industry}}" },
+            { "name": "prompt_version", "value": "={{$node[\"A/B Version Selector\"].json.prompt_version}}" }
           ]
         },
         "options": { "timeout": 20000 }
@@ -65,21 +76,71 @@
       "id": "generate-ai-email",
       "name": "Generate AI Email",
       "type": "n8n-nodes-base.httpRequest",
-      "position": [900, 300],
+      "position": [1000, 300],
       "typeVersion": 4.1,
       "onError": "errorHandler"
     },
     {
       "parameters": {
+        "method": "POST",
+        "url": "http://backend:3000/api/ai/evaluate-email",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "email_body", "value": "={{$json.generated_email}}" },
+            { "name": "context", "value": "={{$node[\"Fetch Ready Leads\"].json}}" }
+          ]
+        }
+      },
+      "id": "ai-quality-gate",
+      "name": "AI Quality Gate",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1200, 300],
+      "typeVersion": 4.1,
+      "notes": "Second LLM call acting as a 'Critic' to score the draft."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.quality_score}}",
+              "operation": "largerEqual",
+              "value2": 8
+            }
+          ]
+        }
+      },
+      "id": "is-quality-high",
+      "name": "Is Quality High? (>=8)",
+      "type": "n8n-nodes-base.if",
+      "position": [1400, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO outreach_logs (lead_id, email_subject, email_body, status) VALUES (:leadId, :subject, :body, 'pending') RETURNING id;",
-        "queryParameters": "leadId={{$node[\"Fetch Ready Leads\"].json.id}}, subject={{$json.email_subject}}, body={{$json.generated_email}}",
+        "query": "UPDATE leads SET status = 'review_needed', updated_at = NOW() WHERE id = :leadId;",
+        "queryParameters": "leadId={{$node[\"Fetch Ready Leads\"].json.id}}",
+        "options": {}
+      },
+      "id": "set-review-needed",
+      "name": "Set Status: Review Needed",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1400, 500],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO outreach_logs (lead_id, email_subject, email_body, status, prompt_version) VALUES (:leadId, :subject, :body, 'pending', :version) RETURNING id;",
+        "queryParameters": "leadId={{$node[\"Fetch Ready Leads\"].json.id}}, subject={{$node[\"Generate AI Email\"].json.email_subject}}, body={{$node[\"Generate AI Email\"].json.generated_email}}, version={{$node[\"A/B Version Selector\"].json.prompt_version}}",
         "options": {}
       },
       "id": "log-pending",
       "name": "Log-First: Pending",
       "type": "n8n-nodes-base.postgres",
-      "position": [1100, 300],
+      "position": [1600, 200],
       "typeVersion": 1
     },
     {
@@ -91,7 +152,7 @@
       "id": "check-gmail-health",
       "name": "Check Gmail Health",
       "type": "n8n-nodes-base.postgres",
-      "position": [1300, 300],
+      "position": [1800, 200],
       "typeVersion": 1
     },
     {
@@ -102,7 +163,7 @@
       "id": "gmail-rate-limit",
       "name": "Gmail Rate Limit",
       "type": "n8n-nodes-base.rateLimit",
-      "position": [1500, 300],
+      "position": [2000, 200],
       "typeVersion": 1
     },
     {
@@ -117,21 +178,21 @@
       "id": "send-via-gmail",
       "name": "Send via Gmail",
       "type": "n8n-nodes-base.gmail",
-      "position": [1700, 300],
+      "position": [2200, 200],
       "typeVersion": 1,
       "onError": "errorHandler"
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE outreach_logs SET status = 'sent', sent_at = NOW() WHERE id = :logId;",
-        "queryParameters": "logId={{$node[\"Log-First: Pending\"].json.id}}",
+        "query": "UPDATE outreach_logs SET status = 'sent', sent_at = NOW(), thread_id = :threadId WHERE id = :logId;",
+        "queryParameters": "logId={{$node[\"Log-First: Pending\"].json.id}}, threadId={{$node[\"Send via Gmail\"].json.threadId}}",
         "options": {}
       },
       "id": "update-log-sent",
       "name": "Update Log: Sent",
       "type": "n8n-nodes-base.postgres",
-      "position": [1900, 200],
+      "position": [2400, 200],
       "typeVersion": 1
     },
     {
@@ -144,7 +205,7 @@
       "id": "update-lead-status",
       "name": "Update Lead Status",
       "type": "n8n-nodes-base.postgres",
-      "position": [2100, 300],
+      "position": [2600, 200],
       "typeVersion": 1
     },
     {
@@ -164,7 +225,7 @@
       "id": "call-dlq",
       "name": "Call DLQ",
       "type": "n8n-nodes-base.httpRequest",
-      "position": [1700, 550],
+      "position": [2200, 450],
       "typeVersion": 4.1
     }
   ],
@@ -172,10 +233,16 @@
     "Run Every 15 Minutes": { "main": [[{ "node": "Fetch Ready Leads", "type": "main", "index": 0 }]] },
     "Fetch Ready Leads": { "main": [[{ "node": "Check AI Service Health", "type": "main", "index": 0 }]] },
     "Check AI Service Health": { "main": [[{ "node": "AI Rate Limit", "type": "main", "index": 0 }]] },
-    "AI Rate Limit": { "main": [[{ "node": "Generate AI Email", "type": "main", "index": 0 }]] },
+    "AI Rate Limit": { "main": [[{ "node": "A/B Version Selector", "type": "main", "index": 0 }]] },
+    "A/B Version Selector": { "main": [[{ "node": "Generate AI Email", "type": "main", "index": 0 }]] },
     "Generate AI Email": { 
-        "main": [[{ "node": "Log-First: Pending", "type": "main", "index": 0 }]],
+        "main": [[{ "node": "AI Quality Gate", "type": "main", "index": 0 }]],
         "error": [[{ "node": "Call DLQ", "type": "main", "index": 0 }]]
+    },
+    "AI Quality Gate": { "main": [[{ "node": "Is Quality High? (>=8)", "type": "main", "index": 0 }]] },
+    "Is Quality High? (>=8)": {
+        "main": [[{ "node": "Log-First: Pending", "type": "main", "index": 0 }]],
+        "false": [[{ "node": "Set Status: Review Needed", "type": "main", "index": 0 }]]
     },
     "Log-First: Pending": { "main": [[{ "node": "Check Gmail Health", "type": "main", "index": 0 }]] },
     "Check Gmail Health": { "main": [[{ "node": "Gmail Rate Limit", "type": "main", "index": 0 }]] },

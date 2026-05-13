@@ -1,0 +1,67 @@
+{
+  "name": "Internal Vault Service (Token Broker)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vault-fetch",
+        "options": {}
+      },
+      "id": "vault-trigger",
+      "name": "Vault Fetch Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [100, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.headers['x-vault-token']}}",
+              "value2": "internal-shared-secret-change-me"
+            }
+          ]
+        }
+      },
+      "id": "verify-auth",
+      "name": "Verify Workflow Auth",
+      "type": "n8n-nodes-base.if",
+      "position": [300, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT secret_value FROM internal_secrets WHERE secret_key = :key;",
+        "queryParameters": "key={{$node[\"Vault Fetch Webhook\"].json.body.secret_name}}",
+        "options": {}
+      },
+      "id": "fetch-secret",
+      "name": "Fetch Secret from DB",
+      "type": "n8n-nodes-base.postgres",
+      "position": [500, 200],
+      "typeVersion": 1,
+      "notes": "Uses vault_admin database credentials (configured in n8n)."
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (workflow_name, action, details) VALUES ('Vault Service', 'SECRET_ACCESS', :details);",
+        "queryParameters": "details={{JSON.stringify({ secret_name: $node[\"Vault Fetch Webhook\"].json.body.secret_name, status: 'success' })}}",
+        "options": {}
+      },
+      "id": "audit-access",
+      "name": "Audit Secret Access",
+      "type": "n8n-nodes-base.postgres",
+      "position": [700, 200],
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Vault Trigger": { "main": [[{ "node": "Verify Workflow Auth", "type": "main", "index": 0 }]] },
+    "Verify Workflow Auth": { "main": [[{ "node": "Fetch Secret from DB", "type": "main", "index": 0 }], []] },
+    "Fetch Secret from DB": { "main": [[{ "node": "Audit Secret Access", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
