@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS service_health (
 );
 
 -- Initialize service_health with default services
-INSERT INTO service_health (service_name) VALUES ('enrichment_api'), ('ai_email_api'), ('gmail')
+INSERT INTO service_health (service_name) VALUES ('enrichment_api'), ('ai_email_api'), ('gmail'), ('ollama')
 ON CONFLICT (service_name) DO NOTHING;
 
 -- 5. Monitoring & Alerting

@@ -32,6 +32,8 @@ services:
       - N8N_TELEMETRY_ENABLED=false
       - N8N_SKIP_POSTHOG_INIT=true
       - NODE_ENV=production
+      - AI_PROVIDER=ollama
+      - LLM_MODEL=dengcao/Qwen3-8B:Q5_K_M
     volumes:
       - n8n_data:/home/node/.n8n
     restart: unless-stopped
@@ -41,6 +43,14 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama
+    restart: unless-stopped
 
 volumes:
   n8n_data:

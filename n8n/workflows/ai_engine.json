@@ -1,0 +1,106 @@
+{
+  "name": "Centralized AI Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-engine",
+        "options": {}
+      },
+      "id": "ai-trigger",
+      "name": "AI Engine Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [100, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "jsCode": "// Resolve provider and model from environment variables\nconst provider = process.env.AI_PROVIDER || 'ollama';\nconst defaultModel = provider === 'ollama' ? 'llama3' : 'gpt-4';\nconst model = process.env.LLM_MODEL || defaultModel;\n\nreturn { \n  provider, \n  model, \n  task: $json.body.task,\n  prompt: $json.body.prompt,\n  context: $json.body.context \n};"
+      },
+      "id": "resolve-provider",
+      "name": "Resolve Provider",
+      "type": "n8n-nodes-base.code",
+      "position": [300, 300],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.provider}}",
+              "value2": "ollama"
+            }
+          ]
+        }
+      },
+      "id": "provider-switch",
+      "name": "Provider Switch",
+      "type": "n8n-nodes-base.if",
+      "position": [500, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/generate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "={{$json.model}}" },
+            { "name": "prompt", "value": "={{$json.prompt}}" },
+            { "name": "format", "value": "json" },
+            { "name": "stream", "value": false }
+          ]
+        }
+      },
+      "id": "ollama-call",
+      "name": "Ollama Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [700, 200],
+      "typeVersion": 4.1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "headerAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "={{$json.model}}" },
+            { "name": "messages", "value": "=[{ \"role\": \"user\", \"content\": \"{{$json.prompt}}\" }]" }
+          ]
+        }
+      },
+      "id": "openai-call",
+      "name": "OpenAI Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [700, 400],
+      "typeVersion": 4.1
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json;\nlet result = {};\n\nif (body.response) { // Ollama format\n    result = JSON.parse(body.response);\n} else if (body.choices) { // OpenAI format\n    result = JSON.parse(body.choices[0].message.content);\n}\n\nreturn result;"
+      },
+      "id": "normalize-output",
+      "name": "Normalize Output",
+      "type": "n8n-nodes-base.code",
+      "position": [900, 300],
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "AI Engine Trigger": { "main": [[{ "node": "Resolve Provider", "type": "main", "index": 0 }]] },
+    "Resolve Provider": { "main": [[{ "node": "Provider Switch", "type": "main", "index": 0 }]] },
+    "Provider Switch": {
+      "main": [
+        [{ "node": "Ollama Call", "type": "main", "index": 0 }],
+        [{ "node": "OpenAI Call", "type": "main", "index": 0 }]
+      ]
+    },
+    "Ollama Call": { "main": [[{ "node": "Normalize Output", "type": "main", "index": 0 }]] },
+    "OpenAI Call": { "main": [[{ "node": "Normalize Output", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
