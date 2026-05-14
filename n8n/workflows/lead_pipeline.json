@@ -22,6 +22,24 @@
       "name": "Claim Leads",
       "type": "n8n-nodes-base.postgres",
       "position": [300, 300],
+      "typeVersion": 1,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.id ? true : false}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "Any Leads Found?",
+      "name": "Any Leads Found?",
+      "type": "n8n-nodes-base.if",
+      "position": [500, 300],
       "typeVersion": 1
     },
     {
@@ -32,7 +50,7 @@
       "id": "Throttle Delay",
       "name": "Throttle Delay",
       "type": "n8n-nodes-base.wait",
-      "position": [500, 300],
+      "position": [700, 200],
       "typeVersion": 1
     },
     {
@@ -43,13 +61,14 @@
       "id": "Execute Enrichment",
       "name": "Execute Enrichment",
       "type": "n8n-nodes-base.executeWorkflow",
-      "position": [700, 300],
+      "position": [900, 200],
       "typeVersion": 1
     }
   ],
   "connections": {
     "schedule-trigger": { "main": [[{ "node": "Claim Leads", "type": "main", "index": 0 }]] },
-    "Claim Leads": { "main": [[{ "node": "Throttle Delay", "type": "main", "index": 0 }]] },
+    "Claim Leads": { "main": [[{ "node": "Any Leads Found?", "type": "main", "index": 0 }]] },
+    "Any Leads Found?": { "main": [[{ "node": "Throttle Delay", "type": "main", "index": 0 }]] },
     "Throttle Delay": { "main": [[{ "node": "Execute Enrichment", "type": "main", "index": 0 }]] }
   }
 }

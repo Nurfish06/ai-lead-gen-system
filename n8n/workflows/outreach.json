@@ -1,5 +1,5 @@
 {
-  "name": "AI Outreach Workflow (v1 Fixed)",
+  "name": "AI Outreach Workflow (Robust)",
   "nodes": [
     {
       "parameters": {
@@ -10,7 +10,10 @@
       "id": "Run Every 15 Minutes",
       "name": "Run Every 15 Minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
-      "position": [100, 300],
+      "position": [
+        100,
+        300
+      ],
       "typeVersion": 1.1
     },
     {
@@ -21,18 +24,98 @@
       "id": "Fetch Leads",
       "name": "Fetch Leads",
       "type": "n8n-nodes-base.postgres",
-      "position": [300, 300],
+      "position": [
+        300,
+        300
+      ],
+      "typeVersion": 1,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{!!$json.id}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "Has Leads?",
+      "name": "Has Leads?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        500,
+        300
+      ],
       "typeVersion": 1
     },
     {
       "parameters": {
-        "operation": "executeQuery",
-        "query": "=INSERT INTO outreach_logs (lead_id, email_subject, email_body, status) VALUES ({{$node[\"Fetch Leads\"].json.id}}, '{{$json.email_subject}}', '{{$json.generated_email}}', 'sent') RETURNING id;"
+        "amount": 2,
+        "unit": "seconds"
       },
-      "id": "Log Outreach",
-      "name": "Log Outreach",
-      "type": "n8n-nodes-base.postgres",
-      "position": [1500, 200],
+      "id": "Safety Delay",
+      "name": "Safety Delay",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        700,
+        200
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/ai-engine",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "task",
+              "value": "generate_email"
+            },
+            {
+              "name": "lead_name",
+              "value": "={{$node[\"Fetch Leads\"].json.name}}"
+            },
+            {
+              "name": "company",
+              "value": "={{$node[\"Fetch Leads\"].json.company}}"
+            },
+            {
+              "name": "prompt",
+              "value": "=Write a personalized sales email for {{$node[\"Fetch Leads\"].json.name}} at {{$node[\"Fetch Leads\"].json.company}}. Keep it under 3 sentences."
+            }
+          ]
+        }
+      },
+      "id": "Generate Email",
+      "name": "Generate Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        900,
+        200
+      ],
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "to": "={{$node[\"Fetch Leads\"].json.email}}",
+        "subject": "Quick question for {{$node[\"Fetch Leads\"].json.name}}",
+        "message": "={{$json.generated_text}}",
+        "options": {}
+      },
+      "id": "Send Gmail",
+      "name": "Send Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "position": [
+        1100,
+        200
+      ],
       "typeVersion": 1
     },
     {
@@ -40,16 +123,82 @@
         "operation": "executeQuery",
         "query": "=UPDATE leads SET status = 'contacted', last_outreach = NOW() WHERE id = {{$node[\"Fetch Leads\"].json.id}};"
       },
-      "id": "Update Lead",
-      "name": "Update Lead",
+      "id": "Update Lead Status",
+      "name": "Update Lead Status",
       "type": "n8n-nodes-base.postgres",
-      "position": [1700, 200],
+      "position": [
+        1300,
+        200
+      ],
       "typeVersion": 1
     }
   ],
   "connections": {
-    "Run Every 15 Minutes": { "main": [[{ "node": "Fetch Leads", "type": "main", "index": 0 }]] },
-    "Fetch Leads": { "main": [[{ "node": "Log Outreach", "type": "main", "index": 0 }]] },
-    "Log Outreach": { "main": [[{ "node": "Update Lead", "type": "main", "index": 0 }]] }
+    "Run Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Fetch Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Leads": {
+      "main": [
+        [
+          {
+            "node": "Has Leads?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Leads?": {
+      "main": [
+        [
+          {
+            "node": "Safety Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Safety Delay": {
+      "main": [
+        [
+          {
+            "node": "Generate Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Email": {
+      "main": [
+        [
+          {
+            "node": "Send Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Gmail": {
+      "main": [
+        [
+          {
+            "node": "Update Lead Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   }
 }
