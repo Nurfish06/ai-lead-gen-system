@@ -1,5 +1,5 @@
 {
-  "name": "Real-Time Gmail Reply Handler",
+  "name": "Real-Time Gmail Reply Handler (Compatible)",
   "nodes": [
     {
       "parameters": {
@@ -14,15 +14,12 @@
       "name": "Gmail Reply Trigger",
       "type": "n8n-nodes-base.gmailTrigger",
       "typeVersion": 1,
-      "position": [100, 300],
-      "notes": "Uses Gmail Pub/Sub (configured via n8n) for real-time notifications."
+      "position": [100, 300]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT l.id, l.email, ol.id as log_id FROM leads l JOIN outreach_logs ol ON l.id = ol.lead_id WHERE l.email = :fromEmail OR ol.thread_id = :threadId LIMIT 1;",
-        "queryParameters": "fromEmail={{$json.from.email}}, threadId={{$json.threadId}}",
-        "options": {}
+        "query": "=SELECT l.id, l.email FROM leads l JOIN outreach_logs ol ON l.id = ol.lead_id WHERE l.email = '{{$json.from.email}}' OR ol.thread_id = '{{$json.threadId}}' LIMIT 1;"
       },
       "id": "find-lead",
       "name": "Find Associated Lead",
@@ -35,7 +32,7 @@
         "conditions": {
           "boolean": [
             {
-              "value1": "={{!!$json.id}}",
+              "value1": "={{$json.id ? true : false}}",
               "value2": true
             }
           ]
@@ -50,9 +47,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE leads SET status = 'responded', updated_at = NOW() WHERE id = :leadId;\nUPDATE outreach_logs SET replied = true, replied_at = NOW() WHERE lead_id = :leadId;",
-        "queryParameters": "leadId={{$node[\"Find Associated Lead\"].json.id}}",
-        "options": {}
+        "query": "=UPDATE leads SET status = 'responded', updated_at = NOW() WHERE id = {{$node[\"find-lead\"].json.id}};"
       },
       "id": "update-lead-responded",
       "name": "Update State: Responded",
@@ -69,23 +64,21 @@
           "parameters": [
             { "name": "severity", "value": "info" },
             { "name": "title", "value": "Lead Responded!" },
-            { "name": "message", "value": "=Lead {{$node[\"Find Associated Lead\"].json.email}} has replied to the outreach. Auto-followup paused." },
-            { "name": "workflow_name", "value": "Gmail Reply Handler" }
+            { "name": "message", "value": "=Lead {{$node[\"find-lead\"].json.email}} has replied." }
           ]
         }
       },
       "id": "alert-response",
       "name": "Notify Sales Team",
       "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
+      "typeVersion": 3,
       "position": [900, 200]
     }
   ],
   "connections": {
-    "Gmail Reply Trigger": { "main": [[{ "node": "Find Associated Lead", "type": "main", "index": 0 }]] },
-    "Find Associated Lead": { "main": [[{ "node": "Is Known Lead?", "type": "main", "index": 0 }]] },
-    "Is Known Lead?": { "main": [[{ "node": "Update State: Responded", "type": "main", "index": 0 }], []] },
-    "Update State: Responded": { "main": [[{ "node": "Notify Sales Team", "type": "main", "index": 0 }]] }
-  },
-  "settings": { "executionOrder": "v1" }
+    "gmail-trigger": { "main": [[{ "node": "find-lead", "type": "main", "index": 0 }]] },
+    "find-lead": { "main": [[{ "node": "is-known-lead", "type": "main", "index": 0 }]] },
+    "is-known-lead": { "main": [[{ "node": "update-lead-responded", "type": "main", "index": 0 }]] },
+    "update-lead-responded": { "main": [[{ "node": "alert-response", "type": "main", "index": 0 }]] }
+  }
 }

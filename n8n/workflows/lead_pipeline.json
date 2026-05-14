@@ -1,5 +1,5 @@
 {
-  "name": "Lead Pipeline Master Orchestration",
+  "name": "Lead Pipeline Master Orchestration (Compatible)",
   "nodes": [
     {
       "parameters": {
@@ -16,68 +16,40 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH claimed_leads AS (\n  SELECT id \n  FROM leads \n  WHERE status = 'pending' \n  ORDER BY created_at ASC \n  LIMIT 50 \n  FOR UPDATE SKIP LOCKED\n)\nUPDATE leads \nSET status = 'enriching', updated_at = NOW() \nFROM claimed_leads \nWHERE leads.id = claimed_leads.id \nRETURNING leads.id, leads.name, leads.email, leads.company;",
-        "options": {}
+        "query": "WITH claimed_leads AS (SELECT id FROM leads WHERE status = 'pending' ORDER BY created_at ASC LIMIT 50 FOR UPDATE SKIP LOCKED) UPDATE leads SET status = 'enriching' FROM claimed_leads WHERE leads.id = claimed_leads.id RETURNING leads.id, leads.name, leads.email;"
       },
-      "id": "claim-and-fetch",
-      "name": "Atomic Claim & Fetch",
+      "id": "Claim Leads",
+      "name": "Claim Leads",
       "type": "n8n-nodes-base.postgres",
       "position": [300, 300],
-      "typeVersion": 1,
-      "notes": "Uses SELECT FOR UPDATE SKIP LOCKED to prevent race conditions during scaling."
+      "typeVersion": 1
     },
     {
       "parameters": {
-        "maxQueriesPerUnit": 5,
-        "unit": "minutes"
+        "amount": 1,
+        "unit": "seconds"
       },
-      "id": "child-workflow-rate-limit",
-      "name": "Child Workflow Rate Limit",
-      "type": "n8n-nodes-base.rateLimit",
-      "position": [700, 300],
-      "typeVersion": 1,
-      "notes": "Controls child workflow spawning rate."
+      "id": "Throttle Delay",
+      "name": "Throttle Delay",
+      "type": "n8n-nodes-base.wait",
+      "position": [500, 300],
+      "typeVersion": 1
     },
     {
       "parameters": {
         "workflowId": "enrichment-workflow-id",
         "options": {}
       },
-      "id": "trigger-enrichment",
-      "name": "Trigger Enrichment",
+      "id": "Execute Enrichment",
+      "name": "Execute Enrichment",
       "type": "n8n-nodes-base.executeWorkflow",
-      "position": [900, 300],
-      "typeVersion": 1,
-      "onError": "errorHandler"
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://localhost:5678/webhook/error-handler",
-        "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            { "name": "workflow_name", "value": "Master Orchestration" },
-            { "name": "failed_node", "value": "={{$node[\"Error Handler Receiver\"].name}}" },
-            { "name": "error", "value": "={{$node[\"Error Handler Receiver\"].json.error}}" },
-            { "name": "input_payload", "value": "={{$json}}" }
-          ]
-        }
-      },
-      "id": "call-dlq",
-      "name": "Call DLQ",
-      "type": "n8n-nodes-base.httpRequest",
-      "position": [900, 550],
-      "typeVersion": 4.1
+      "position": [700, 300],
+      "typeVersion": 1
     }
   ],
   "connections": {
-    "Run Every 30 Minutes": { "main": [[{ "node": "Atomic Claim & Fetch", "type": "main", "index": 0 }]] },
-    "Atomic Claim & Fetch": { "main": [[{ "node": "Child Workflow Rate Limit", "type": "main", "index": 0 }]] },
-    "Child Workflow Rate Limit": { "main": [[{ "node": "Trigger Enrichment", "type": "main", "index": 0 }]] },
-    "Trigger Enrichment": {
-        "error": [[{ "node": "Call DLQ", "type": "main", "index": 0 }]]
-    }
-  },
-  "settings": { "executionOrder": "v1" }
+    "schedule-trigger": { "main": [[{ "node": "Claim Leads", "type": "main", "index": 0 }]] },
+    "Claim Leads": { "main": [[{ "node": "Throttle Delay", "type": "main", "index": 0 }]] },
+    "Throttle Delay": { "main": [[{ "node": "Execute Enrichment", "type": "main", "index": 0 }]] }
+  }
 }
