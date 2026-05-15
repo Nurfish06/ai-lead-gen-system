@@ -52,5 +52,41 @@ This guide details how data flows through the system's automated pipelines. The 
 
 ---
 
-## 🛡️ Resilience Tip
-If any step fails (e.g., Gmail is down), the status will remain as it was (e.g., `enriched`). The **Outreach Engine** will automatically try to process it again in its next 15-minute run, ensuring no lead is ever forgotten!
+## 🚨 The Unhappy Path: Error Handling (DLQ)
+**Goal**: Ensure no lead is lost when a system fails.
+
+Every workflow node in LeadPulse is connected to a global **Error Handler**.
+1.  **Detection**: If a node fails (e.g., API timeout or Database error), the workflow stops.
+2.  **The Dead Letter Queue (DLQ)**: The error is intercepted and saved to the `pipeline_errors` table.
+    *   **Payload**: The exact data that was being processed is saved so it can be retried.
+    *   **Alert**: A critical notification is sent to the **Alert Manager** (Slack/Email).
+3.  **Recovery**: Once the issue is fixed, leads in the DLQ can be manually or automatically retried without losing their place in the sequence.
+
+---
+
+## 🛡️ The Shield: Circuit Breakers & Health
+**Goal**: Protect your API keys and sender reputation during outages.
+
+The **Service Health Monitor** acts as a "Circuit Breaker" for external services (Gmail, OpenAI, Enrichment APIs).
+1.  **Monitoring**: Every 15 minutes, the system "probes" all external services.
+2.  **Tripping the Breaker**: If a service fails 3 times in a row, its status is set to `down` in the `service_health` table.
+3.  **Protection**: Workflows check this table *before* running. If a service is `down`, the workflow pauses **before** wasting an execution or potentially damaging your sender reputation.
+4.  **Auto-Reset**: Once the service is detected as `up` again, the circuit breaker resets and the pipeline resumes.
+
+---
+
+## 📊 Full Pipeline Summary
+
+| Stage | Status | Workflow | Action | Next Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **Ingestion** | `none` | Ingestion | Captures external data | `pending` |
+| **Enrichment** | `pending` | Master Pipeline | Claims lead for processing | `enriching` |
+| **Intelligence** | `enriching` | Enrichment | Finds data & scores lead | `enriched` |
+| **Outreach** | `enriched` | Outreach | AI writes & Gmail sends | `contacted` |
+| **Follow-up** | `contacted` | Follow-up | Checks for replies | `responded` |
+| **ERROR** | `any` | Error Handler | Saves to DLQ for retry | `failed` |
+
+---
+
+## 💡 Resilience Tip
+The system uses **Atomic State Management**. We use `FOR UPDATE SKIP LOCKED` in our database queries, which means multiple n8n instances can run at the same time without ever processing the same lead twice.

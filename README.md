@@ -9,6 +9,11 @@
 
 ---
 
+> [!TIP]
+> **New to the system?** Check out the [**Workflow Flow Guide**](file:///d:/Nura/N8N/n8n-local/ai-lead-gen-system/WORKFLOW_FLOW_GUIDE.md) for a step-by-step visual map of how leads move through the pipeline.
+
+---
+
 ## 🚀 Key Capabilities
 
 *   **⚡ AI-Powered Personalization**: Dynamically generates high-conversion email content based on lead industry, company size, and LinkedIn data.
