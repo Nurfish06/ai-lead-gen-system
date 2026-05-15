@@ -1,0 +1,88 @@
+{
+  "name": "0-Lead-Ingestion-Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ingest-lead",
+        "options": {}
+      },
+      "id": "Webhook-Trigger",
+      "name": "Postman / Scraper Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [100, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst data = input.body || input;\n\n// Basic Validation\nif (!data.email) throw new Error(\"Email is required\");\n\nreturn {\n  name: data.name || \"Unknown\",\n  email: data.email.toLowerCase(),\n  company: data.company || \"N/A\",\n  source: data.source || \"web_ingestion\"\n};"
+      },
+      "id": "Validate & Format",
+      "name": "Validate & Format",
+      "type": "n8n-nodes-base.code",
+      "position": [350, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO leads (name, email, company, status, created_at, updated_at) \nVALUES ('{{$json.name}}', '{{$json.email}}', '{{$json.company}}', 'pending', NOW(), NOW())\nON CONFLICT (email) DO UPDATE SET updated_at = NOW()\nRETURNING id, name, email;"
+      },
+      "id": "Save to DB",
+      "name": "Save to DB",
+      "type": "n8n-nodes-base.postgres",
+      "position": [600, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=Lead successfully received and queued for enrichment (ID: {{$json.id}})",
+        "options": {}
+      },
+      "id": "Success Response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [850, 300],
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Webhook-Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate & Format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Format": {
+      "main": [
+        [
+          {
+            "node": "Save to DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to DB": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

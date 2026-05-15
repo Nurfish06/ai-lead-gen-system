@@ -1,5 +1,5 @@
 {
-  "name": "Service Health Monitor (Compatible)",
+  "name": "Service Health Monitor (Full & Robust)",
   "nodes": [
     {
       "parameters": {
@@ -11,24 +11,35 @@
       "name": "Report Failure Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1,
-      "position": [250, 200]
+      "position": [
+        100,
+        200
+      ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "=UPDATE service_health SET failure_count = failure_count + 1, last_failure = NOW(), last_checked = NOW() WHERE service_name = '{{$json.body.service_name}}' RETURNING *;"
+        "query": "=INSERT INTO service_health (service_name, failure_count, last_failure, last_checked, status) \nVALUES ('{{$json.body.service_name}}', 1, NOW(), NOW(), 'up')\nON CONFLICT (service_name) DO UPDATE \nSET failure_count = service_health.failure_count + 1, \n    last_failure = EXCLUDED.last_failure, \n    last_checked = EXCLUDED.last_checked\nRETURNING *;"
       },
-      "id": "inc-failure",
-      "name": "Increment Failure Count",
+      "id": "upsert-failure",
+      "name": "Upsert Failure",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
-      "position": [450, 200]
+      "position": [
+        300,
+        200
+      ],
+      "alwaysOutputData": true
     },
     {
       "parameters": {
         "conditions": {
           "number": [
-            { "value1": "={{$json.failure_count}}", "operation": "largerEqual", "value2": 5 }
+            {
+              "value1": "={{$json.failure_count || 0}}",
+              "operation": "largerEqual",
+              "value2": 5
+            }
           ]
         }
       },
@@ -36,7 +47,10 @@
       "name": "Threshold Reached?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [650, 200]
+      "position": [
+        500,
+        200
+      ]
     },
     {
       "parameters": {
@@ -47,49 +61,219 @@
       "name": "Set Service DOWN",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
-      "position": [850, 150]
+      "position": [
+        700,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/alert-manager",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "severity",
+              "value": "critical"
+            },
+            {
+              "name": "title",
+              "value": "=Service DOWN: {{$node[\"upsert-failure\"].json.service_name}}"
+            },
+            {
+              "name": "message",
+              "value": "=The service has reached the failure threshold."
+            },
+            {
+              "name": "workflow_name",
+              "value": "Health Monitor"
+            }
+          ]
+        }
+      },
+      "id": "alert-down",
+      "name": "Alert Down",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        900,
+        150
+      ]
     },
     {
       "parameters": {
         "rule": {
-          "interval": [{ "minutes": 5 }]
+          "interval": [
+            {
+              "minutes": 15
+            }
+          ]
         }
       },
-      "id": "recovery-check-trigger",
+      "id": "recovery-trigger",
       "name": "Recovery Check Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1,
-      "position": [250, 450]
+      "position": [
+        100,
+        450
+      ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT * FROM service_health WHERE status = 'down';"
       },
-      "id": "fetch-down-services",
+      "id": "fetch-down",
       "name": "Fetch DOWN Services",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
-      "position": [450, 450],
+      "position": [
+        300,
+        450
+      ],
       "alwaysOutputData": true
     },
     {
       "parameters": {
-        "operation": "executeQuery",
-        "query": "=UPDATE service_health SET status = 'up', failure_count = 0, last_checked = NOW() WHERE service_name = '{{$json.service_name}}';"
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{!!$json.service_name}}",
+              "value2": true
+            }
+          ]
+        }
       },
-      "id": "reset-health",
-      "name": "Reset Health to UP",
+      "id": "any-down?",
+      "name": "Any Services Down?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        500,
+        450
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://{{$json.service_name == 'enrichment_api' ? 'backend:3000/health' : 'ollama:11434/'}}",
+        "options": {}
+      },
+      "id": "probe-service",
+      "name": "Probe Service",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        700,
+        450
+      ],
+      "onError": "continue"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE service_health SET status = 'up', failure_count = 0, last_checked = NOW() WHERE service_name = '{{$node[\"fetch-down\"].json.service_name}}';"
+      },
+      "id": "set-up",
+      "name": "Reset to UP",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 1,
-      "position": [850, 450]
+      "position": [
+        900,
+        450
+      ]
     }
   ],
   "connections": {
-    "Report Failure Webhook": { "main": [[{ "node": "Increment Failure Count", "type": "main", "index": 0 }]] },
-    "Increment Failure Count": { "main": [[{ "node": "Threshold Reached?", "type": "main", "index": 0 }]] },
-    "Threshold Reached?": { "main": [[{ "node": "Set Service DOWN", "type": "main", "index": 0 }]] },
-    "Recovery Check Trigger": { "main": [[{ "node": "Fetch DOWN Services", "type": "main", "index": 0 }]] },
-    "Fetch DOWN Services": { "main": [[{ "node": "Reset Health to UP", "type": "main", "index": 0 }]] }
+    "report-failure-webhook": {
+      "main": [
+        [
+          {
+            "node": "upsert-failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "upsert-failure": {
+      "main": [
+        [
+          {
+            "node": "check-threshold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check-threshold": {
+      "main": [
+        [
+          {
+            "node": "set-down",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "set-down": {
+      "main": [
+        [
+          {
+            "node": "alert-down",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "recovery-trigger": {
+      "main": [
+        [
+          {
+            "node": "fetch-down",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetch-down": {
+      "main": [
+        [
+          {
+            "node": "any-down?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "any-down?": {
+      "main": [
+        [
+          {
+            "node": "probe-service",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "probe-service": {
+      "main": [
+        [
+          {
+            "node": "set-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   }
 }
